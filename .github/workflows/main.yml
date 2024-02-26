@@ -68,6 +68,17 @@ jobs:
         env:
           PYTHONDEVMODE: yes
 
+      - name: Upload Python ${{matrix.python-version}} coverage report to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          directory: .git
+          files: coverage${{matrix.python-version}}.xml
+          env_vars: OS,PYTHON
+          fail_ci_if_error: false
+          flags: python${{matrix.python-version}}
+          name: coverage${{matrix.python-version}}
+          verbose: true
+
       - uses: dciborow/action-pylint@0.1.0
         if: ${{ matrix.python-version != '2.7' }}
         with:
