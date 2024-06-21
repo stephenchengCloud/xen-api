@@ -198,6 +198,9 @@ pythonPlatform       = "Linux"
 typeCheckingMode     = "standard"
 reportMissingImports = false
 pythonVersion        = "3.6"
+extraPaths           = [
+    "python3/stubs/XenAPI.pyi",
+  ]
 exclude              = [
     "ocaml/xcp-rrdd/scripts/rrdd/rrdd.py",
     "ocaml/xcp-rrdd/scripts/rrdd/rrdd-example.py",

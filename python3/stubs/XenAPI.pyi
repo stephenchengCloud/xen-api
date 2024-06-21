@@ -6,6 +6,7 @@ Stub for the XenAPI module: https://xapi-project.github.io/xen-api/overview.html
 import http.client as httplib
 import xmlrpc.client as xmlrpclib
 from _typeshed import Incomplete as Incomplete
+from typing import Any
 
 translation: Incomplete
 API_VERSION_1_1: str
@@ -42,7 +43,7 @@ class _Dispatcher:
         """Authenticate the session with the XenAPI server."""
     def logout(self) -> None:
         """End the session with the XenAPI server."""
-    session: Incomplete
+    session: Any
     secret: Incomplete
     SR: Incomplete
     PBD: Incomplete
