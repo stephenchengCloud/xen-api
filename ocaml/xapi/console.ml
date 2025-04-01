@@ -92,7 +92,9 @@ let real_proxy __context _ _ vnc_port s =
       | Port x ->
           Unixext.open_connection_fd "127.0.0.1" x
       | Path x ->
-          Unixext.open_connection_unix_fd x
+          let sock = Unixext.open_connection_unix_fd "/tmp/vnc_busy.sock" in
+          debug "Stephen connect to the busy vnc server";
+          sock
     in
     (* Unixext.proxy closes fds itself so we must dup here *)
     let s' = Unix.dup s in
