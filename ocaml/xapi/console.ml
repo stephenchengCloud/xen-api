@@ -34,9 +34,6 @@ type address =
 
 (* console is listening on a Unix domain socket *)
 
-(* Global lock: true means a VNC connection is active *)
-let global_vnc_lock = ref false
-
 let string_of_address = function
   | Port x ->
       "localhost:" ^ string_of_int x
@@ -104,7 +101,6 @@ let real_proxy __context _ _ vnc_port s =
       (Unixext.int_of_file_descr s') ;
     Unixext.proxy vnc_sock s' ;
     debug "Proxy exited"
-    global_vnc_lock := false
   with exn -> debug "error: %s" (ExnHelper.string_of_exn exn)
 
 let ws_proxy __context req protocol address s =
@@ -243,6 +239,7 @@ let handler proxy_fn (req : Request.t) s _ =
       let console = console_of_request __context req in
       (* only sessions with 'http/connect_console/host_console' permission *)
       let protocol = Db.Console.get_protocol ~__context ~self:console in
+      (* can access dom0 host consoles *)
       rbac_check_for_control_domain __context req console
         Rbac_static.permission_http_connect_console_host_console
           .Db_actions.role_name_label ;
@@ -250,19 +247,7 @@ let handler proxy_fn (req : Request.t) s _ =
       check_vm_is_running_here __context console ;
       match address_of_console __context console with
       | Some vnc_port ->
-          if !global_vnc_lock then
-            (* A connection is already active: refuse the new one *)
-            Http_svr.headers s (Http.http_403_forbidden ())
-          else begin
-            (* Set the lock and start proxying *)
-            global_vnc_lock := true;
-            (try
-               proxy_fn __context req protocol vnc_port s;
-               global_vnc_lock := false
-             with exn ->
-               global_vnc_lock := false;
-               raise exn)
-          end
+          proxy_fn __context req protocol vnc_port s
       | None ->
           Http_svr.headers s (Http.http_404_missing ())
   )
