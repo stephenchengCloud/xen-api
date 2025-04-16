@@ -34,6 +34,65 @@ type address =
 
 (* console is listening on a Unix domain socket *)
 
+(* This module is used to limit the number of connections to a VM console.
+   It uses a mutex to ensure thread safety when accessing the connection count. *)
+module Connection_limit = struct
+  let active_connections : (string, int64) Hashtbl.t = Hashtbl.create 100
+
+  let mutex = Mutex.create ()
+
+  let add vm_id =
+    Mutex.lock mutex ;
+    let count =
+      try Hashtbl.find active_connections vm_id with Not_found -> 0L
+    in
+    Hashtbl.replace active_connections vm_id (Int64.add count 1L) ;
+    Mutex.unlock mutex
+
+  let remove vm_id =
+    Mutex.lock mutex ;
+    ( try
+        let count = Hashtbl.find active_connections vm_id in
+        let new_count = Int64.sub count 1L in
+        if new_count <= 0L then
+          Hashtbl.remove active_connections vm_id
+        else
+          Hashtbl.replace active_connections vm_id new_count
+      with Not_found -> ()
+    ) ;
+    Mutex.unlock mutex
+
+  let count vm_id =
+    Mutex.lock mutex ;
+    let count =
+      match Hashtbl.find_opt active_connections vm_id with
+      | Some n ->
+          n
+      | None ->
+          0L
+    in
+    Mutex.unlock mutex ; count
+
+  (* max_allowed = 0 means no limit *)
+  let can_add vm_id max_allowed =
+    if max_allowed = 0L then
+      true
+    else
+      Int64.compare (count vm_id) max_allowed < 0
+
+end
+
+let connection_limit_exceeded __context vm_id =
+  let master = Helpers.get_master ~__context in
+  let max_connections =
+    Db.Host.get_console_access_limit ~__context ~self:master
+  in
+  if not (Connection_limit.can_add vm_id max_connections) then (
+    debug "Connection limit (%Ld) exceeded for VM %s" max_connections vm_id ;
+    true
+  ) else
+    false
+
 let string_of_address = function
   | Port x ->
       "localhost:" ^ string_of_int x
@@ -84,26 +143,34 @@ let address_of_console __context console : address option =
     ) ;
   address_option
 
-let real_proxy __context _ _ vnc_port s =
+let real_proxy __context console _ _ vnc_port s =
   try
-    Http_svr.headers s (Http.http_200_ok ()) ;
-    let vnc_sock =
-      match vnc_port with
-      | Port x ->
-          Unixext.open_connection_fd "127.0.0.1" x
-      | Path x ->
-          Unixext.open_connection_unix_fd x
-    in
-    (* Unixext.proxy closes fds itself so we must dup here *)
-    let s' = Unix.dup s in
-    debug "Connected; running proxy (between fds: %d and %d)"
-      (Unixext.int_of_file_descr vnc_sock)
-      (Unixext.int_of_file_descr s') ;
-    Unixext.proxy vnc_sock s' ;
-    debug "Proxy exited"
+    let vm = Db.Console.get_VM ~__context ~self:console in
+    let vm_id = Ref.string_of vm in
+    if connection_limit_exceeded __context vm_id then
+      Http_svr.headers s (Http.http_503_service_unavailable ())
+    else (
+      Http_svr.headers s (Http.http_200_ok ()) ;
+      let vnc_sock =
+        match vnc_port with
+        | Port x ->
+            Unixext.open_connection_fd "127.0.0.1" x
+        | Path x ->
+            Unixext.open_connection_unix_fd x
+      in
+      (* Unixext.proxy closes fds itself so we must dup here *)
+      let s' = Unix.dup s in
+      debug "Connected; running proxy (between fds: %d and %d)"
+        (Unixext.int_of_file_descr vnc_sock)
+        (Unixext.int_of_file_descr s') ;
+      Connection_limit.add vm_id ;
+      Unixext.proxy vnc_sock s' ;
+      Connection_limit.remove vm_id ;
+      debug "Proxy exited"
+    )
   with exn -> debug "error: %s" (ExnHelper.string_of_exn exn)
 
-let ws_proxy __context req protocol address s =
+let ws_proxy __context _ req protocol address s =
   let addr = match address with Port p -> string_of_int p | Path p -> p in
   let protocol =
     match protocol with `rfb -> "rfb" | `vt100 -> "vt100" | `rdp -> "rdp"
@@ -247,7 +314,7 @@ let handler proxy_fn (req : Request.t) s _ =
       check_vm_is_running_here __context console ;
       match address_of_console __context console with
       | Some vnc_port ->
-          proxy_fn __context req protocol vnc_port s
+          proxy_fn __context console req protocol vnc_port s
       | None ->
           Http_svr.headers s (Http.http_404_missing ())
   )
