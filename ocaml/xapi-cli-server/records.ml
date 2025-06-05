@@ -1595,6 +1595,9 @@ let pool_record rpc session_id pool =
               ~value:(safe_bool_of_string "ssh-auto-mode" value)
           )
           ()
+      ; make_field ~name:"console-access-limit"
+          ~get:(fun () -> Int64.to_string (x ()).API.pool_console_access_limit)
+          ()
       ]
   }
 

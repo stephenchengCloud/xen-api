@@ -446,3 +446,6 @@ val set_console_idle_timeout :
 
 val set_ssh_auto_mode :
   __context:Context.t -> self:API.ref_pool -> value:bool -> unit
+
+val limit_console_access :
+  __context:Context.t -> self:API.ref_pool -> value:int64 -> unit

@@ -1621,6 +1621,23 @@ let set_ssh_auto_mode =
       ]
     ~allowed_roles:_R_POOL_ADMIN ()
 
+let limit_console_access =
+  call ~name:"limit_console_access"
+    ~doc:
+      "Limit the number of concurrent console sessions per VM on all hosts in \
+       the pool."
+    ~lifecycle:[]
+    ~params:
+      [
+        (Ref _pool, "self", "The pool")
+      ; ( Int
+        , "value"
+        , "The maximum number of concurrent console sessions per VM on all \
+           hosts in the pool. A value of 0 means no limit."
+        )
+      ]
+    ~allowed_roles:_R_POOL_ADMIN ()
+
 (** A pool class *)
 let t =
   create_obj ~in_db:true
@@ -1720,6 +1737,7 @@ let t =
       ; set_ssh_enabled_timeout
       ; set_console_idle_timeout
       ; set_ssh_auto_mode
+      ; limit_console_access
       ]
     ~contents:
       ([
@@ -2250,6 +2268,10 @@ let t =
             "Indicates whether an HA-protected VM that is shut down from \
              inside (not through the API) should be automatically rebooted \
              when HA is enabled"
+        ; field ~qualifier:DynamicRO ~lifecycle:[] ~ty:Int
+            ~default_value:(Some (VInt 0L)) "console_access_limit"
+            "The number of concurrent console sessions per VM on all hosts in \
+             the pool (0 means no limit)"
         ]
       )
     ()
