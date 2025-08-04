@@ -166,6 +166,10 @@ let response_forbidden ?req s =
   in
   response_error_html ?version s "403" "Forbidden" [] body
 
+let response_forbidden_custom_body ?req s body =
+  let version = Option.map get_return_version req in
+  response_error_html ?version s "403" "Forbidden" [] body
+
 let response_badrequest ?req s =
   let version = Option.map get_return_version req in
   let body =
@@ -437,6 +441,32 @@ let read_request_exn ~proxy_seen ~read_timeout ~total_timeout ~max_length fd =
          (false, {empty with Http.Request.frame; additional_headers})
     |> snd
   in
+  E.debug "Request method: %s" (Http.string_of_method_t request.m);
+  E.debug "Request URI: %s" request.uri;
+  E.debug "Request version: HTTP/%s" request.version;
+  E.debug "Request cookie: %s" (String.concat ", " (List.map (fun (k,v) -> Printf.sprintf "%s=%s" k v) request.cookie));
+  E.debug "Query parameters: %s"
+    (String.concat ", " 
+       (List.map (fun (k,v) -> Printf.sprintf "%s=%s" k v) request.query));
+  E.debug "Headers: %s"
+    (String.concat ", "
+       (List.map (fun (k,v) -> Printf.sprintf "%s: %s" k v) 
+          request.additional_headers));
+  ( match request.m, request.content_length with
+      | Connect, Some len -> 
+          let body = Unixext.really_read_string fd (Int64.to_int len) in
+          let truncated_body = 
+            if String.length body > 128 then
+              String.sub body 0 128 ^ "... (truncated)"
+            else 
+              body
+          in
+          E.debug "CONNECT request body: %s" truncated_body
+      | Connect, None ->
+          E.debug "CONNECT request with no content length specified"
+      | _, _ -> 
+          () (* Don't print for other methods *)
+    );
   (request, proxy)
 
 (** [read_request fd] returns [Some req] read from [fd], or [None]. If [None] it will have

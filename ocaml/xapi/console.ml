@@ -83,9 +83,7 @@ module Connection_limit = struct
 end
 
 let connection_limit_exceeded __context vm_id =
-  let master = Helpers.get_master ~__context in
-  let max_connections =
-    Db.Host.get_console_access_limit ~__context ~self:master
+  let max_connections = 1L
   in
   if not (Connection_limit.can_add vm_id max_connections) then (
     debug "Connection limit (%Ld) exceeded for VM %s" max_connections vm_id ;
@@ -143,12 +141,17 @@ let address_of_console __context console : address option =
     ) ;
   address_option
 
-let real_proxy __context console _ _ vnc_port s =
+let send_connection_limit_message req s =
+  let body = Printf.sprintf 
+    "<html><body><h1>Connection Limit Exceeded</h1><p>Only %Ld connection is allowed at a time. Please try again later.</p></body></html>" 1L in
+  Http_svr.response_forbidden_custom_body ~req s body
+
+let real_proxy __context console req _ vnc_port s =
   try
     let vm = Db.Console.get_VM ~__context ~self:console in
     let vm_id = Ref.string_of vm in
     if connection_limit_exceeded __context vm_id then
-      Http_svr.headers s (Http.http_503_service_unavailable ())
+      send_connection_limit_message req s
     else (
       Http_svr.headers s (Http.http_200_ok ()) ;
       let vnc_sock =
