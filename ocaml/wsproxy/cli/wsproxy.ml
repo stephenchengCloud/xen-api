@@ -97,9 +97,14 @@ let proxy (fd : Lwt_unix.file_descr) addr protocol =
         lwt_fd_enumerator fd (unframe (writer (really_write localfd) "thread2"))
         >>= fun _ -> Lwt.return_unit
       in
+      let timeout_duration = 10.0 in
+      let thread3 =
+        Lwt_unix.sleep timeout_duration
+        >>= fun _ -> Lwt.return_unit
+      in
       (* closing the connection in one of the threads above in general leaves the other pending forever,
        * by using choose here, we make sure that as soon as one of the threads completes, both are closed *)
-      Lwt.choose [thread1; thread2] >>= fun () ->
+      Lwt.choose [thread1; thread2; thread3] >>= fun () ->
       Logs_lwt.debug (fun m -> m "Closing proxy session %s" session_id)
   )
 

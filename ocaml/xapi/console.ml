@@ -173,53 +173,61 @@ let real_proxy __context console req _ vnc_port s =
     )
   with exn -> debug "error: %s" (ExnHelper.string_of_exn exn)
 
-let ws_proxy __context _ req protocol address s =
-  let addr = match address with Port p -> string_of_int p | Path p -> p in
-  let protocol =
-    match protocol with `rfb -> "rfb" | `vt100 -> "vt100" | `rdp -> "rdp"
-  in
-  let real_path = Filename.concat "/var/lib/xcp" "websockproxy" in
-  let sock =
-    try Some (Fecomms.open_unix_domain_sock_client real_path)
-    with e ->
-      debug "Error connecting to wsproxy (%s)" (Printexc.to_string e) ;
-      Http_svr.headers s (Http.http_501_method_not_implemented ()) ;
-      None
-  in
-  (* Ensure we always close the socket *)
-  finally
-    (fun () ->
-      let upgrade_successful =
-        Option.map
-          (fun sock ->
-            try
-              let result = (sock, Some (Ws_helpers.upgrade req s)) in
-              result
-            with _ -> (sock, None)
-          )
-          sock
+let ws_proxy __context console req protocol address s =
+  try
+    let vm = Db.Console.get_VM ~__context ~self:console in
+    let vm_id = Ref.string_of vm in
+    if connection_limit_exceeded __context vm_id then
+      send_connection_limit_message req s
+    else (
+      let addr = match address with Port p -> string_of_int p | Path p -> p in
+      let protocol =
+        match protocol with `rfb -> "rfb" | `vt100 -> "vt100" | `rdp -> "rdp"
       in
-      Option.iter
-        (function
-          | sock, Some ty ->
-              let wsprotocol =
-                match ty with
-                | Ws_helpers.Hixie76 ->
-                    "hixie76"
-                | Ws_helpers.Hybi10 ->
-                    "hybi10"
-              in
-              let message =
-                Printf.sprintf "%s:%s:%s" wsprotocol protocol addr
-              in
-              let len = String.length message in
-              ignore (Unixext.send_fd_substring sock message 0 len [] s)
-          | _, None ->
-              Http_svr.headers s (Http.http_501_method_not_implemented ())
-          )
-        upgrade_successful
+      let real_path = Filename.concat "/var/lib/xcp" "websockproxy" in
+      let sock =
+        try Some (Fecomms.open_unix_domain_sock_client real_path)
+        with e ->
+          debug "Error connecting to wsproxy (%s)" (Printexc.to_string e) ;
+          Http_svr.headers s (Http.http_501_method_not_implemented ()) ;
+          None
+      in
+      (* Ensure we always close the socket *)
+      finally
+        (fun () ->
+          let upgrade_successful =
+            Option.map
+              (fun sock ->
+                try
+                  let result = (sock, Some (Ws_helpers.upgrade req s)) in
+                  result
+                with _ -> (sock, None)
+              )
+              sock
+          in
+          Option.iter
+            (function
+              | sock, Some ty ->
+                  let wsprotocol =
+                    match ty with
+                    | Ws_helpers.Hixie76 ->
+                        "hixie76"
+                    | Ws_helpers.Hybi10 ->
+                        "hybi10"
+                  in
+                  let message =
+                    Printf.sprintf "%s:%s:%s" wsprotocol protocol addr
+                  in
+                  let len = String.length message in
+                  ignore (Unixext.send_fd_substring sock message 0 len [] s)
+              | _, None ->
+                  Http_svr.headers s (Http.http_501_method_not_implemented ())
+              )
+            upgrade_successful
+        )
+        (fun () -> Option.iter (fun sock -> Unix.close sock) sock)
     )
-    (fun () -> Option.iter (fun sock -> Unix.close sock) sock)
+  with exn -> debug "error: %s" (ExnHelper.string_of_exn exn)
 
 let default_console_of_vm ~__context ~self =
   try
