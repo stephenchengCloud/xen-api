@@ -326,7 +326,7 @@ let make_pool ~__context ~master ?(name_label = "") ?(name_description = "")
     ~ext_auth_cache_enabled:false ~ext_auth_cache_size:50L
     ~ext_auth_cache_expiry:300L ~update_sync_frequency ~update_sync_day
     ~update_sync_enabled ~recommendations ~license_server
-    ~ha_reboot_vm_on_internal_shutdown ~limit_console_sessions:0L ;
+    ~ha_reboot_vm_on_internal_shutdown ~limit_console_sessions:false ;
   pool_ref
 
 let default_sm_features =

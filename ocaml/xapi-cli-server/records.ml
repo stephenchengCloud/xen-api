@@ -1596,7 +1596,11 @@ let pool_record rpc session_id pool =
           )
           ()
       ; make_field ~name:"limit-console-sessions"
-          ~get:(fun () -> Int64.to_string (x ()).API.pool_limit_console_sessions)
+          ~get:(fun () -> string_of_bool (x ()).API.pool_limit_console_sessions)
+          ~set:(fun x ->
+            Client.Pool.set_limit_console_sessions ~rpc ~session_id ~self:pool
+              ~value:(bool_of_string x)
+          )
           ()
       ]
   }

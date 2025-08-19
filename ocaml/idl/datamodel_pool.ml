@@ -1629,10 +1629,11 @@ let set_limit_console_sessions =
     ~params:
       [
         (Ref _pool, "self", "The pool")
-      ; ( Int
+      ; ( Bool
         , "value"
-        , "The maximum number of concurrent console sessions per VM on all \
-           hosts in the pool. A value of 0 means no limit."
+        , "When set to true, console session concurrency is limited to one \
+           session per VM/host; when set to false, multiple concurrent \
+           console sessions are allowed"
         )
       ]
     ~allowed_roles:_R_POOL_ADMIN ()
@@ -2267,10 +2268,10 @@ let t =
             "Indicates whether an HA-protected VM that is shut down from \
              inside (not through the API) should be automatically rebooted \
              when HA is enabled"
-        ; field ~qualifier:DynamicRO ~lifecycle:[] ~ty:Int
-            ~default_value:(Some (VInt 0L)) "limit_console_sessions"
-            "The number of concurrent console sessions per VM on all hosts in \
-             the pool (0 means no limit)"
+        ; field ~writer_roles:_R_POOL_OP ~qualifier:RW ~lifecycle:[] ~ty:Bool
+            ~default_value:(Some (VBool false)) "limit_console_sessions"
+            "Indicate whether the console concurrent limit is set for \
+             the pool (false means no limit)"
         ]
       )
     ()

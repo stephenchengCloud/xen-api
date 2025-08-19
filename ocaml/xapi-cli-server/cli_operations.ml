@@ -6886,12 +6886,6 @@ let pool_disable_ssh _printer rpc session_id params =
   let pool = get_pool_with_default rpc session_id params "uuid" in
   Client.Pool.disable_ssh ~rpc ~session_id ~self:pool
 
-let pool_limit_console_sessions _printer rpc session_id params =
-  let limit = List.assoc "limit" params in
-  let value = try Int64.of_string limit with _ -> 0L in
-  let pool = get_pool_with_default rpc session_id params "uuid" in
-  Client.Pool.set_limit_console_sessions ~rpc ~session_id ~self:pool ~value
-
 let host_restore fd _printer rpc session_id params =
   let filename = List.assoc "file-name" params in
   let op _ host =

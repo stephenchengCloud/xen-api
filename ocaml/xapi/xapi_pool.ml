@@ -4189,20 +4189,7 @@ let set_console_idle_timeout = Ssh.set_console_timeout
 let set_ssh_auto_mode = Ssh.set_ssh_auto_mode
 
 let set_limit_console_sessions ~__context ~self:_ ~value =
-  let assert_value_valid value =
-    if value < 0L then
-      raise
-        (Api_errors.Server_error
-           ( Api_errors.invalid_value
-           , ["limit_console_sessions"; Int64.to_string value]
-           )
-        )
-  in
-  assert_value_valid value ;
-
   try
-    (* Currently, we limit the console access to 1 *)
-    let value = if value > 1L then 1L else value in
     let pool = Helpers.get_pool ~__context in
     Db.Pool.set_limit_console_sessions ~__context ~self:pool ~value
   with e ->
