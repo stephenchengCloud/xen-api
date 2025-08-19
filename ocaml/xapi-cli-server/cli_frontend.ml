@@ -3155,7 +3155,7 @@ let rec cmdtable_data : (string * cmd_spec) list =
       ; flags= []
       }
     )
-  ; ( "pool-limit-console-access"
+  ; ( "pool-limit-console-sessions"
     , {
         reqd= ["limit"]
       ; optn= []
@@ -3163,7 +3163,7 @@ let rec cmdtable_data : (string * cmd_spec) list =
           "Limit the number of concurrent console sessions per VM on all hosts \
            in the pool. limit=0 means no limit and limit >= 1 will be taken as \
            limit=1"
-      ; implementation= No_fd Cli_operations.pool_limit_console_access
+      ; implementation= No_fd Cli_operations.pool_limit_console_sessions
       ; flags= []
       }
     )

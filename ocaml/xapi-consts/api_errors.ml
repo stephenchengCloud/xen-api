@@ -1430,7 +1430,7 @@ let set_console_timeout_partially_failed =
 let set_ssh_auto_mode_partially_failed =
   add_error "SET_SSH_AUTO_MODE_PARTIALLY_FAILED"
 
-let limit_console_access_failed = add_error "LIMIT_CONSOLE_ACCESS_FAILED"
+let limit_console_sessions_failed = add_error "LIMIT_CONSOLE_SESSIONS_FAILED"
 
 let host_driver_no_hardware = add_error "HOST_DRIVER_NO_HARDWARE"
 

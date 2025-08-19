@@ -2057,8 +2057,8 @@ let _ =
   error Api_errors.sysprep ["vm"; "message"]
     ~doc:"VM.sysprep error with details in the message" () ;
 
-  error Api_errors.limit_console_access_failed []
-    ~doc:"Failed to limit console access." () ;
+  error Api_errors.limit_console_sessions_failed []
+    ~doc:"Failed to limit console sessions." () ;
 
   message
     (fst Api_messages.ha_pool_overcommitted)

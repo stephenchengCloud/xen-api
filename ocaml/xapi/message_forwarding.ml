@@ -1195,9 +1195,9 @@ functor
           value ;
         Local.Pool.set_ssh_auto_mode ~__context ~self ~value
 
-      let limit_console_access ~__context ~self =
+      let limit_console_sessions ~__context ~self =
         info "%s: pool = '%s'" __FUNCTION__ (pool_uuid ~__context self) ;
-        Local.Pool.limit_console_access ~__context ~self
+        Local.Pool.set_limit_console_sessions ~__context ~self
     end
 
     module VM = struct
