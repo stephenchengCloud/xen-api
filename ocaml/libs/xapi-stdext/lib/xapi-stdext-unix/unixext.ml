@@ -392,6 +392,7 @@ let log_with_time ?(file="/tmp/idle_timeout.txt") msg =
   output_string oc (Printf.sprintf "[%s] %s\n" time_str msg);
   close_out oc
 
+(* https://github.com/rfbproto/rfbproto/blob/master/rfbproto.rst *)  
 module RFB_Msg_Type_Parser = struct
   type state = {
     mutable rfb_phase: [`Handshake | `Security | `ClientInit | `Messages];
@@ -405,6 +406,7 @@ module RFB_Msg_Type_Parser = struct
     incomplete_msg_remaining = 0;
   }
 
+  (* https://github.com/rfbproto/rfbproto/blob/master/rfbproto.rst#client-to-server-messages *)
   let message_length msg_type = 
     match msg_type with
     | 0 -> 20  (* SetPixelFormat *)
@@ -413,7 +415,7 @@ module RFB_Msg_Type_Parser = struct
     | 4 -> 8   (* KeyEvent *)
     | 5 -> 6   (* PointerEvent *)
     | 6 -> -1  (* ClientCutText - variable, need to read length *)
-    | _ -> 1   (* Unknown, skip 1 byte *)
+    | _ -> -2  (* Unknown - cannot determine length, stop parsing *)
 
   let is_input_event msg_type = msg_type = 4 || msg_type = 5
 
@@ -440,7 +442,7 @@ module RFB_Msg_Type_Parser = struct
       data
     )
 
-(* Handle variable length messages *)
+(* Handle variable length messages. For now, only SetEncodings(2) and ClientCutText(6) *)
   let handle_variable_message state data offset msg_type available =
     match msg_type with
     | 2 when available >= 4 -> (* SetEncodings *)
@@ -466,7 +468,7 @@ module RFB_Msg_Type_Parser = struct
           `Incomplete (total_len - available)
     | 2 -> `Incomplete (4 - available)  (* Need more data for SetEncodings header *)
     | 6 -> `Incomplete (8 - available)  (* Need more data for ClientCutText header *)
-    | _ -> `Skip 1
+    | _ -> `Skip_All (* Unlikely *)
 
   (* Process a single message in Messages phase *)
   let process_single_message state data offset available =
@@ -478,30 +480,35 @@ module RFB_Msg_Type_Parser = struct
     let msg_len = message_length msg_type in
     log_with_time (Printf.sprintf "[debug] Message length for type %d: %d" msg_type msg_len);
 
-    if msg_len = -1 then
-      handle_variable_message state data offset msg_type available
-    else if available >= msg_len then
-      `Complete msg_len
-    else
-      `Incomplete (msg_len - available)
+    match msg_len with
+    | -1 -> 
+        handle_variable_message state data offset msg_type available
+    | len when len > 0 -> 
+        if available >= len then `Complete len
+        else `Incomplete (len - available)
+    | _ -> 
+        log_with_time (Printf.sprintf "[debug] Unknown RFB message type: %d (0x%02X), skipping remaining data" msg_type msg_type);
+        `Skip_All
 
-  (* Handle handshake phase transitions *)
-  let advance_handshake state data_len offset =
+  (* Different RFB versions have variations in their handshake protocols,
+    so we implement a simplified handshake parser that handles the most common cases.
+    If handshake parsing encounters unexpected data, we gracefully transition to 
+    the Messages phase where unknown message types can be handled appropriately.
+    This prevents the parser from getting stuck on protocol variations while
+    ensuring we can still achieve our primary goal: detecting KeyEvent and 
+    PointerEvent messages for activity monitoring. *)
+  let progress_handshake state data_len offset =
     match state.rfb_phase with
     | `Handshake when data_len - offset >= 12 ->
         log_with_time (Printf.sprintf "[debug] Handshake 12 bytes");
         state.rfb_phase <- `ClientInit;
         Some 12
-    (*| `Security when data_len - offset >= 1 ->
-        log_with_time (Printf.sprintf "[debug] Security 1 byte");
-        state.rfb_phase <- `ClientInit;
-        Some 1 *)
     | `ClientInit when data_len - offset >= 1 ->
         log_with_time (Printf.sprintf "[debug] ClientInit 1 byte");
         state.rfb_phase <- `Messages;
         Some 1
     | _ ->
-        log_with_time (Printf.sprintf "[debug] unknown 1 byte");
+        state.rfb_phase <- `Messages;
         None
 
   (* Handle incomplete message continuation *)
@@ -536,14 +543,18 @@ module RFB_Msg_Type_Parser = struct
               process_data state data (offset + msg_len)
           | `Incomplete remaining -> 
               state.incomplete_msg_remaining <- remaining
-          | `Skip n -> 
-              process_data state data (offset + n)
+          | `Skip_All -> 
+              (* Stop processing the current buffer and treat the next incoming data as fresh.
+                 Since each network read likely starts with a message header, this allows 
+                 graceful recovery from parsing errors without getting permanently out of sync
+                 with the RFB protocol stream. *)
+              state.incomplete_msg_remaining <- 0
           )
       | _ ->
           (* Handle handshake phases *)
-          (match advance_handshake state data_len offset with
-          | Some advance_bytes -> 
-              process_data state data (offset + advance_bytes)
+          (match progress_handshake state data_len offset with
+          | Some consumed_bytes -> 
+              process_data state data (offset + consumed_bytes)
           | None -> ()
           )
 
