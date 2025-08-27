@@ -83,9 +83,7 @@ module Connection_limit = struct
 end
 
 let connection_limit_exceeded __context vm_id =
-  let master = Helpers.get_master ~__context in
-  let max_connections =
-    Db.Host.get_console_access_limit ~__context ~self:master
+  let max_connections = 1L
   in
   if not (Connection_limit.can_add vm_id max_connections) then (
     debug "Connection limit (%Ld) exceeded for VM %s" max_connections vm_id ;

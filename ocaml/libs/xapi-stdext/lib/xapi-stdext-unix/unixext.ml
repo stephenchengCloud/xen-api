@@ -381,7 +381,181 @@ let with_polly f =
   let finally () = Polly.close polly in
   Xapi_stdext_pervasives.Pervasiveext.finally (fun () -> f polly) finally
 
+let log_with_time ?(file="/tmp/idle_timeout.txt") msg =
+  let oc = open_out_gen [Open_creat; Open_text; Open_append] 0o644 file in
+  let time_str =
+    let tm = Unix.localtime (Unix.time ()) in
+    Printf.sprintf "%04d-%02d-%02d %02d:%02d:%02d"
+      (tm.tm_year + 1900) (tm.tm_mon + 1) tm.tm_mday
+      tm.tm_hour tm.tm_min tm.tm_sec
+  in
+  output_string oc (Printf.sprintf "[%s] %s\n" time_str msg);
+  close_out oc
+
+module RFB_Msg_Type_Parser = struct
+  type state = {
+    mutable rfb_phase: [`Handshake | `Security | `ClientInit | `Messages];
+    mutable last_input_time: float;
+    mutable incomplete_msg_remaining: int; (* bytes needed to complete current message *)
+  }
+
+  let create () = {
+    rfb_phase = `Handshake;
+    last_input_time = Unix.gettimeofday ();
+    incomplete_msg_remaining = 0;
+  }
+
+  let message_length msg_type = 
+    match msg_type with
+    | 0 -> 20  (* SetPixelFormat *)
+    | 2 -> -1  (* SetEncodings - variable, need to read count *)
+    | 3 -> 10  (* FramebufferUpdateRequest *)
+    | 4 -> 8   (* KeyEvent *)
+    | 5 -> 6   (* PointerEvent *)
+    | 6 -> -1  (* ClientCutText - variable, need to read length *)
+    | _ -> 1   (* Unknown, skip 1 byte *)
+
+  let is_input_event msg_type = msg_type = 4 || msg_type = 5
+
+  (* Extract only NEW data from circular buffer since last read *)
+  let get_new_data_from_cbuf (cbuf : CBuf.t) original_len =
+    let new_data_len = cbuf.len - original_len in
+    if new_data_len <= 0 then Bytes.create 0
+    else (
+      let data = Bytes.create new_data_len in
+      let buffer_size = Bytes.length cbuf.buffer in
+      let new_data_start = (cbuf.start + original_len) mod buffer_size in
+      let end_pos = new_data_start + new_data_len in
+      
+      if end_pos <= buffer_size then
+        (* No wraparound *)
+        Bytes.blit cbuf.buffer new_data_start data 0 new_data_len
+      else (
+        (* Handle wraparound *)
+        let first_chunk = buffer_size - new_data_start in
+        let second_chunk = new_data_len - first_chunk in
+        Bytes.blit cbuf.buffer new_data_start data 0 first_chunk;
+        Bytes.blit cbuf.buffer 0 data first_chunk second_chunk
+      );
+      data
+    )
+
+(* Handle variable length messages *)
+  let handle_variable_message state data offset msg_type available =
+    match msg_type with
+    | 2 when available >= 4 -> (* SetEncodings *)
+        let count = (Bytes.get data (offset + 2) |> int_of_char) lsl 8 lor
+                   (Bytes.get data (offset + 3) |> int_of_char) in
+        let total_len = 4 + count * 4 in
+        log_with_time (Printf.sprintf "[debug] SetEncodings total length: %d" total_len);
+        if available >= total_len then
+          `Complete total_len
+        else
+          `Incomplete (total_len - available)
+    | 6 when available >= 8 -> (* ClientCutText *)
+        let text_len = 
+          (Bytes.get data (offset + 4) |> int_of_char) lsl 24 lor
+          (Bytes.get data (offset + 5) |> int_of_char) lsl 16 lor
+          (Bytes.get data (offset + 6) |> int_of_char) lsl 8 lor
+          (Bytes.get data (offset + 7) |> int_of_char) in
+        let total_len = 8 + text_len in
+        log_with_time (Printf.sprintf "[debug] ClientCutText total length: %d" total_len);
+        if available >= total_len then
+          `Complete total_len
+        else
+          `Incomplete (total_len - available)
+    | 2 -> `Incomplete (4 - available)  (* Need more data for SetEncodings header *)
+    | 6 -> `Incomplete (8 - available)  (* Need more data for ClientCutText header *)
+    | _ -> `Skip 1
+
+  (* Process a single message in Messages phase *)
+  let process_single_message state data offset available =
+    let msg_type = Bytes.get data offset |> int_of_char in
+    
+    if is_input_event msg_type then
+      state.last_input_time <- Unix.gettimeofday ();
+    
+    let msg_len = message_length msg_type in
+    log_with_time (Printf.sprintf "[debug] Message length for type %d: %d" msg_type msg_len);
+
+    if msg_len = -1 then
+      handle_variable_message state data offset msg_type available
+    else if available >= msg_len then
+      `Complete msg_len
+    else
+      `Incomplete (msg_len - available)
+
+  (* Handle handshake phase transitions *)
+  let advance_handshake state data_len offset =
+    match state.rfb_phase with
+    | `Handshake when data_len - offset >= 12 ->
+        log_with_time (Printf.sprintf "[debug] Handshake 12 bytes");
+        state.rfb_phase <- `ClientInit;
+        Some 12
+    (*| `Security when data_len - offset >= 1 ->
+        log_with_time (Printf.sprintf "[debug] Security 1 byte");
+        state.rfb_phase <- `ClientInit;
+        Some 1 *)
+    | `ClientInit when data_len - offset >= 1 ->
+        log_with_time (Printf.sprintf "[debug] ClientInit 1 byte");
+        state.rfb_phase <- `Messages;
+        Some 1
+    | _ ->
+        log_with_time (Printf.sprintf "[debug] unknown 1 byte");
+        None
+
+  (* Handle incomplete message continuation *)
+  let continue_incomplete_message state data_len offset =
+    let available = data_len - offset in
+    if available >= state.incomplete_msg_remaining then (
+      let consumed = state.incomplete_msg_remaining in
+      state.incomplete_msg_remaining <- 0;
+      Some (offset + consumed)
+    ) else (
+      state.incomplete_msg_remaining <- state.incomplete_msg_remaining - available;
+      None
+    )
+
+  (* Main processing logic - much cleaner now *)
+  let rec process_data state data offset =
+    let data_len = Bytes.length data in
+    
+    if offset >= data_len then ()
+    else if state.incomplete_msg_remaining > 0 then
+      (* Continue processing incomplete message *)
+      match continue_incomplete_message state data_len offset with
+      | Some new_offset -> process_data state data new_offset
+      | None -> ()
+    else
+      (* Start new message or handle handshake *)
+      match state.rfb_phase with
+      | `Messages ->
+          let available = data_len - offset in
+          (match process_single_message state data offset available with
+          | `Complete msg_len -> 
+              process_data state data (offset + msg_len)
+          | `Incomplete remaining -> 
+              state.incomplete_msg_remaining <- remaining
+          | `Skip n -> 
+              process_data state data (offset + n)
+          )
+      | _ ->
+          (* Handle handshake phases *)
+          (match advance_handshake state data_len offset with
+          | Some advance_bytes -> 
+              process_data state data (offset + advance_bytes)
+          | None -> ()
+          )
+
+  let is_idle state timeout =
+    state.rfb_phase = `Messages && 
+    Unix.gettimeofday () -. state.last_input_time > timeout
+end
+
 let proxy (a : Unix.file_descr) (b : Unix.file_descr) =
+  let rfb_state = RFB_Msg_Type_Parser.create () in
+  let idle_timeout_sec = 30.0 in (* 30 sec timeout *)
+  let event_timeout_ms = 5000 in  (* 5 second timeout *)
   let size = 64 * 1024 in
   (* [a'] is read from [a] and will be written to [b] *)
   (* [b'] is read from [b] and will be written to [a] *)
@@ -413,12 +587,36 @@ let proxy (a : Unix.file_descr) (b : Unix.file_descr) =
         Polly.upd polly a a_events ;
       if Polly.Events.(b_events <> empty) then
         Polly.upd polly b b_events ;
-      Polly.wait_fold polly 4 (-1) () (fun _polly fd events () ->
+      Polly.wait_fold polly 4 (event_timeout_ms) () (fun _polly fd events () ->
           (* Do the writing before the reading *)
-          if Polly.Events.(test out events) then
-            if a = fd then CBuf.write b' a else CBuf.write a' b ;
-          if Polly.Events.(test inp events) then
-            if a = fd then CBuf.read a' a else CBuf.read b' b
+          if Polly.Events.(test out events) then (
+            if a = fd then (
+              CBuf.write b' a
+            ) else (
+              CBuf.write a' b
+            )
+          );
+          if Polly.Events.(test inp events) then (
+            if a = fd then (
+              CBuf.read a' a
+            ) else (
+              let original_len = b'.len in
+              CBuf.read b' b;
+              
+              let new_data = RFB_Msg_Type_Parser.get_new_data_from_cbuf b' original_len in
+              if Bytes.length new_data > 0 then
+                log_with_time (Printf.sprintf "[debug] buf len=%d, first byte=%d, hex=%s"
+                (Bytes.length new_data) (int_of_char (Bytes.get new_data 0))
+                (String.concat " " (List.init (min (Bytes.length new_data) 16) (fun i -> Printf.sprintf "%02x" (int_of_char (Bytes.get new_data i))))) );
+                RFB_Msg_Type_Parser.process_data rfb_state new_data 0
+            )
+          )
+      ) ;
+      if RFB_Msg_Type_Parser.is_idle rfb_state idle_timeout_sec then (
+        log_with_time "[OOO] idle timeout reached, stopping proxy";
+        Unix.shutdown a Unix.SHUTDOWN_ALL ;
+        Unix.shutdown b Unix.SHUTDOWN_ALL ;
+        raise End_of_file ;
       ) ;
       (* If there's nothing else to read or write then signal the other end *)
       List.iter
