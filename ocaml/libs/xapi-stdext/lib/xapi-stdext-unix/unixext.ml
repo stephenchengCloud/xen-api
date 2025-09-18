@@ -338,7 +338,8 @@ module CBuf = struct
     in
     let read = Unix.read fd x.buffer next len in
     if read = 0 then x.r_closed <- true ;
-    x.len <- x.len + read
+    x.len <- x.len + read ;
+    (x.buffer, read, next)
 end
 
 exception Process_still_alive
@@ -381,6 +382,16 @@ let with_polly f =
   let finally () = Polly.close polly in
   Xapi_stdext_pervasives.Pervasiveext.finally (fun () -> f polly) finally
 
+let log_in_file ?(file = "/var/log/idle_timeout.txt") msg =
+  let oc = open_out_gen [Open_creat; Open_text; Open_append] 0o644 file in
+  let time_str =
+    let tm = Unix.localtime (Unix.time ()) in
+    Printf.sprintf "%04d-%02d-%02d %02d:%02d:%02d" (tm.tm_year + 1900)
+      (tm.tm_mon + 1) tm.tm_mday tm.tm_hour tm.tm_min tm.tm_sec
+  in
+  output_string oc (Printf.sprintf "[%s] %s\n" time_str msg) ;
+  close_out oc
+
 let proxy (a : Unix.file_descr) (b : Unix.file_descr) =
   let size = 64 * 1024 in
   (* [a'] is read from [a] and will be written to [b] *)
@@ -418,7 +429,21 @@ let proxy (a : Unix.file_descr) (b : Unix.file_descr) =
           if Polly.Events.(test out events) then
             if a = fd then CBuf.write b' a else CBuf.write a' b ;
           if Polly.Events.(test inp events) then
-            if a = fd then CBuf.read a' a else CBuf.read b' b
+            if a = fd then ignore (CBuf.read a' a) else
+              let (buffer, read_len, offset) = CBuf.read b' b in
+              if read_len > 0 then (
+                let first_byte = if read_len > 0 then Bytes.get_uint8 buffer offset else 0 in
+                let bytes_as_ints = 
+                  let rec collect acc i =
+                    if i >= min read_len 20 then List.rev acc (* Show first 20 bytes as ints *)
+                    else collect (Bytes.get_uint8 buffer (offset + i) :: acc) (i + 1)
+                  in
+                  collect [] 0
+                in
+                log_in_file (Printf.sprintf "[proxy] Read %d bytes, Msg Type=%d, bytes=[%s]" 
+                  read_len first_byte
+                  (String.concat "; " (List.map string_of_int bytes_as_ints)))
+              )
       ) ;
       (* If there's nothing else to read or write then signal the other end *)
       List.iter
