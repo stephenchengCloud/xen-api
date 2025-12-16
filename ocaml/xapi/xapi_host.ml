@@ -79,8 +79,8 @@ let assert_safe_to_reenable ~__context ~self ~user_request =
   Repository_helpers.assert_no_host_pending_mandatory_guidance ~__context
     ~host:self ;
   let host_disabled_until_reboot =
-    try bool_of_string (Localdb.get Constants.host_disabled_until_reboot)
-    with _ -> false
+    Localdb.get_bool Constants.host_disabled_until_reboot
+    |> Option.value ~default:false
   in
   if host_disabled_until_reboot then
     raise
@@ -88,7 +88,7 @@ let assert_safe_to_reenable ~__context ~self ~user_request =
          (Api_errors.host_disabled_until_reboot, [Ref.string_of self])
       ) ;
   let host_auto_enable =
-    try bool_of_string (Localdb.get Constants.host_auto_enable) with _ -> true
+    Localdb.get_bool Constants.host_auto_enable |> Option.value ~default:true
   in
   if (not host_auto_enable) && not user_request then
     raise
@@ -109,17 +109,17 @@ let assert_safe_to_reenable ~__context ~self ~user_request =
       )
       unplugged_pbds ;
     let pifs = Db.Host.get_PIFs ~__context ~self in
-    let unplugged_pifs =
+    let non_pluggable_pifs =
       List.filter
-        (fun pif -> not (Db.PIF.get_currently_attached ~__context ~self:pif))
+        (fun pif -> not (Xapi_pif_helpers.is_pluggable ~__context pif))
         pifs
     in
-    (* Make sure it is 'ok' to have these PIFs remain unplugged *)
+    (* Make sure it is 'ok' that these PIFs cannot be plugged *)
     List.iter
       (fun self ->
         Xapi_pif.abort_if_network_attached_to_protected_vms ~__context ~self
       )
-      unplugged_pifs
+      non_pluggable_pifs
   )
 
 (* The maximum pool size allowed must be restricted to 3 hosts for the pool which does not have Pool_size feature *)
@@ -1029,7 +1029,7 @@ let create ~__context ~uuid ~name_label ~name_description:_ ~hostname ~address
     ~license_params ~edition ~license_server ~local_cache_sr ~chipset_info
     ~ssl_legacy:_ ~last_software_update ~last_update_hash ~ssh_enabled
     ~ssh_enabled_timeout ~ssh_expiry ~console_idle_timeout ~ssh_auto_mode
-    ~secure_boot ~software_version =
+    ~secure_boot ~software_version ~https_only ~numa_affinity_policy =
   (* fail-safe. We already test this on the joining host, but it's racy, so multiple concurrent
      pool-join might succeed. Note: we do it in this order to avoid a problem checking restrictions during
      the initial setup of the database *)
@@ -1064,7 +1064,7 @@ let create ~__context ~uuid ~name_label ~name_description:_ ~hostname ~address
     (* no or multiple pools *)
   in
   Db.Host.create ~__context ~ref:host ~current_operations:[]
-    ~allowed_operations:[] ~https_only:false ~software_version ~enabled:false
+    ~allowed_operations:[] ~https_only ~software_version ~enabled:false
     ~aPI_version_major:Datamodel_common.api_version_major
     ~aPI_version_minor:Datamodel_common.api_version_minor
     ~aPI_version_vendor:Datamodel_common.api_version_vendor
@@ -1073,8 +1073,7 @@ let create ~__context ~uuid ~name_label ~name_description:_ ~hostname ~address
     ~name_label ~uuid ~other_config:[] ~capabilities:[]
     ~cpu_configuration:[] (* !!! FIXME hard coding *)
     ~cpu_info:[] ~chipset_info ~memory_overhead:0L
-    ~sched_policy:"credit" (* !!! FIXME hard coding *)
-    ~numa_affinity_policy:`default_policy
+    ~sched_policy:"credit" (* !!! FIXME hard coding *) ~numa_affinity_policy
     ~supported_bootloaders:(List.map fst Xapi_globs.supported_bootloaders)
     ~suspend_image_sr:Ref.null ~crash_dump_sr:Ref.null ~logging:[] ~hostname
     ~address ~metrics ~license_params ~boot_free_mem:0L ~ha_statefiles:[]
@@ -3417,9 +3416,15 @@ let update_firewalld_service_status ~__context =
         | Xenha ->
             (* Only xha needs to enable firewalld service. Other HA cluster
                stacks don't need. *)
-            bool_of_string (Localdb.get Constants.ha_armed)
-            && Localdb.get Constants.ha_cluster_stack
-               = !Xapi_globs.cluster_stack_default
+            let is_armed () =
+              Localdb.get_bool Constants.ha_armed |> Option.value ~default:false
+            in
+            let uses_xhad () =
+              Localdb.get Constants.ha_cluster_stack
+              |> Option.value ~default:!Xapi_globs.cluster_stack_default
+              = Constants.Ha_cluster_stack.(to_string Xhad)
+            in
+            is_armed () && uses_xhad ()
       in
       List.iter
         (fun s -> if is_enabled s then enable_firewalld_service s)

@@ -177,7 +177,9 @@
   (xapi-idl
    (= :version))
   (xapi-types
-   (= :version)))
+   (= :version))
+  (xapi-stdext-zerocheck
+    (= :version)))
  (synopsis "A CLI for xapi storage services")
  (description
   "The CLI allows you to directly manipulate virtual disk images, without them being attached to VMs."))
@@ -322,6 +324,7 @@
   xapi-types
   xapi-stdext-pervasives
   xapi-stdext-unix
+  xapi-stdext-zerocheck
   xen-api-client
   xen-api-client-lwt
   xenctrl
@@ -583,6 +586,7 @@
   (depends
     qcow-stream
     cmdliner
+    yojson
   )
 )
 
@@ -590,7 +594,17 @@
  (name varstored-guard))
 
 (package
- (name uuid))
+ (name uuid)
+ (synopsis "Library used by xapi to generate database UUIDs")
+ (description
+  "This library allows xapi to use UUIDs with phantom types to avoid mixing UUIDs from different classes of objects. It's based on `uuidm`.")
+ (depends
+   (alcotest :with-test)
+   (fmt :with-test)
+   ptime
+   uuidm
+ )
+)
 
 (package
  (name stunnel)
@@ -611,6 +625,8 @@
   (xapi-log
    (= :version))
   (xapi-stdext-pervasives
+   (= :version))
+  (xapi-stdext-std
    (= :version))
   (xapi-stdext-threads
    (= :version))
@@ -872,4 +888,5 @@
  (synopsis "Xapi's standard library extension, Zerocheck")
  (authors "Jonathan Ludlam")
  (depends
+  (alcotest :with-test)
   (odoc :with-doc)))

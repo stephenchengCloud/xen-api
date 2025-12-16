@@ -863,7 +863,7 @@ let migration_https_only = ref true
 
 let cluster_stack_root = ref "/usr/libexec/xapi/cluster-stack"
 
-let cluster_stack_default = ref "xhad"
+let cluster_stack_default = ref Constants.default_cluster_stack
 
 let xen_cmdline_path = ref "/opt/xensource/libexec/xen-cmdline"
 
@@ -976,6 +976,9 @@ let udevadm = ref "/usr/sbin/udevadm"
 let pvsproxy_close_cache_vdi = ref "/opt/citrix/pvsproxy/close-cache-vdi.sh"
 
 let yum_repos_config_dir = ref "/etc/yum.repos.d"
+
+let dnf_repo_config_file =
+  ref "/etc/dnf/repos.override.d/99-config_manager.repo"
 
 let remote_repository_prefix = ref "remote"
 
@@ -1134,6 +1137,8 @@ let xapi_requests_cgroup =
   "/sys/fs/cgroup/cpu/control.slice/xapi.service/request"
 
 let genisoimage_path = ref "/usr/bin/genisoimage"
+
+let https_only = ref false
 
 (* Event.{from,next} batching delays *)
 let make_batching name ~delay_before ~delay_between =
@@ -1850,6 +1855,11 @@ let other_options =
     , Arg.Set_int max_span_depth
     , (fun () -> string_of_int !max_span_depth)
     , "The maximum depth to which spans are recorded in a trace in Tracing"
+    )
+  ; ( "https-only-default"
+    , Arg.Set https_only
+    , (fun () -> string_of_bool !https_only)
+    , "Only expose HTTPS service, disable HTTP/80 in firewall when set to true"
     )
   ; ( "firewall-backend"
     , Arg.String
